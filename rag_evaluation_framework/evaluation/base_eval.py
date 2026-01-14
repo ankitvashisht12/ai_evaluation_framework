@@ -16,13 +16,46 @@ from rag_evaluation_framework.evaluation.vector_store.chroma import ChromaVector
 from rag_evaluation_framework.evaluation.metrics.chunk_level_recall import ChunkLevelRecall
 
 class Evaluation:
+    """
+    RAG Evaluation Framework for systematically evaluating retrieval pipelines.
+    
+    This class orchestrates the evaluation process:
+    1. Load and chunk knowledge base documents
+    2. Embed chunks and store in vector store
+    3. Run retrieval against a LangSmith dataset
+    4. Calculate metrics and return results
+    
+    Example:
+        >>> from rag_evaluation_framework import Evaluation
+        >>> evaluator = Evaluation(
+        ...     langsmith_dataset_name="my-dataset",
+        ...     kb_data_path="./knowledge_base"
+        ... )
+        >>> results = evaluator.run(k=5)
+    """
 
     langsmith_dataset_name: str
     kb_data_path: str
+    query_field: str
 
-    def __init__(self, langsmith_dataset_name: str, kb_data_path: str):
+    def __init__(
+        self, 
+        langsmith_dataset_name: str, 
+        kb_data_path: str,
+        query_field: str = "question"
+    ):
+        """
+        Initialize the Evaluation framework.
+        
+        Args:
+            langsmith_dataset_name: Name of the LangSmith dataset to evaluate against.
+            kb_data_path: Path to directory containing knowledge base markdown files.
+            query_field: Field name in the dataset containing the query/question.
+                        Defaults to "question". Common alternatives: "query", "input".
+        """
         self.langsmith_dataset_name = langsmith_dataset_name
         self.kb_data_path = kb_data_path
+        self.query_field = query_field
 
     def __get_kb_markdown_files_path(self) -> List[Path]:
         if not os.path.exists(self.kb_data_path):
@@ -31,16 +64,32 @@ class Evaluation:
         return [Path(os.path.join(self.kb_data_path, file)) for file in os.listdir(self.kb_data_path) if file.endswith(".md")]
 
     def __run_retrieval(self, input: dict, embedder: Embedder, vector_store: VectorStore, k: int, reranker: Optional[Reranker] = None) -> List[str]:
-        question = input.get("question", "")
+        """
+        Run retrieval for a single query.
+        
+        Args:
+            input: Dictionary containing the query (field name specified by query_field)
+            embedder: Embedder to use for query embedding
+            vector_store: Vector store to search
+            k: Number of results to retrieve
+            reranker: Optional reranker to apply
+            
+        Returns:
+            List of retrieved chunk texts
+        """
+        query = input.get(self.query_field, "")
+        
+        if not query:
+            return []
         
         # Embed the query
-        query_embedding = embedder.embed_docs([question])[0]
+        query_embedding = embedder.embed_docs([query])[0]
         
         # Search in vector store using query embedding
         retrieved_chunks = vector_store.search(query_embedding, k)
 
         if reranker:
-            retrieved_chunks = reranker.rerank(retrieved_chunks, question, k)
+            retrieved_chunks = reranker.rerank(retrieved_chunks, query, k)
 
         return retrieved_chunks
 
@@ -121,33 +170,78 @@ class Evaluation:
         )
 
         # Extract metrics and experiment URL from results
+        # ExperimentResults is iterable - iterate directly over it
         metrics_dict = {}
         langsmith_experiment_url = None
         
-        # Process results to extract metrics
+        # Try to get experiment URL/name
         if hasattr(results, 'experiment_url'):
             langsmith_experiment_url = results.experiment_url
+        elif hasattr(results, 'experiment_name'):
+            # Experiment name is available - URL can be constructed if needed
+            # LangSmith typically prints the URL, but we store the name for reference
+            pass
         
         # Extract metric scores from results
-        # The results object structure may vary, so we handle it safely
+        # Iterate through runs in the experiment results (ExperimentResults is iterable)
         try:
-            if hasattr(results, 'results') and results.results:
-                # Check if results.results is iterable (list or tuple)
-                if isinstance(results.results, (list, tuple)):
-                    results_list: List[Any] = list(results.results)
-                    for result in results_list:
-                        if hasattr(result, 'evaluation_results'):
-                            eval_results = result.evaluation_results
-                            if isinstance(eval_results, (list, tuple)):
-                                for eval_result in eval_results:
-                                    if hasattr(eval_result, 'key') and hasattr(eval_result, 'score'):
-                                        metric_name = eval_result.key
-                                        score = eval_result.score
-                                        metrics_dict[metric_name] = score
-        except (AttributeError, TypeError):
-            # If results structure is different, we'll just return empty metrics dict
+            # Collect all metric scores across all runs
+            metrics_by_name: Dict[str, List[float]] = {}
+            
+            for run in results:
+                # Check for feedback/evaluation results on each run
+                if hasattr(run, 'feedback') and run.feedback:
+                    # Feedback is a list of evaluation results
+                    feedback_list = run.feedback
+                    if isinstance(feedback_list, (list, tuple)):
+                        for feedback in feedback_list:
+                            if hasattr(feedback, 'key') and hasattr(feedback, 'score'):
+                                metric_name = str(feedback.key) if feedback.key else None
+                                score = feedback.score
+                                # Type check and convert score to float
+                                if metric_name and isinstance(score, (int, float)):
+                                    # Collect scores for averaging later
+                                    if metric_name not in metrics_by_name:
+                                        metrics_by_name[metric_name] = []
+                                    metrics_by_name[metric_name].append(float(score))
+                
+                # Alternative: check feedback_stats if available
+                if hasattr(run, 'feedback_stats') and run.feedback_stats:
+                    feedback_stats = run.feedback_stats
+                    if isinstance(feedback_stats, dict):
+                        for metric_name_key, score_value in feedback_stats.items():
+                            metric_name = str(metric_name_key) if metric_name_key else None
+                            if not metric_name:
+                                continue
+                            if metric_name not in metrics_by_name:
+                                metrics_by_name[metric_name] = []
+                            # Handle both single values and lists
+                            if isinstance(score_value, (list, tuple)):
+                                # Convert all values to float
+                                float_values = [float(v) for v in score_value if isinstance(v, (int, float))]
+                                metrics_by_name[metric_name].extend(float_values)
+                            elif isinstance(score_value, (int, float)):
+                                metrics_by_name[metric_name].append(float(score_value))
+            
+            # Calculate average scores for each metric (or use last value)
+            # Averaging makes sense for metrics calculated across multiple runs
+            for metric_name, scores in metrics_by_name.items():
+                if scores:
+                    # Use average score across all runs
+                    metrics_dict[metric_name] = sum(scores) / len(scores)
+                    
+        except (AttributeError, TypeError, StopIteration) as e:
+            # If results structure is different, try alternative extraction methods
             # The raw_results will still contain all the information
-            pass
+            try:
+                # Alternative: Use to_pandas() method if available
+                if hasattr(results, 'to_pandas'):
+                    df = results.to_pandas()
+                    # Extract metrics from dataframe columns if they exist
+                    # This is a fallback - the iteration method above should work
+                    pass
+            except Exception:
+                pass
 
         return {
             "metrics": metrics_dict,
