@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Callable
-from langsmith import Evaluator, EvaluationResult
+from langsmith import EvaluationResult
 from langsmith.schemas import Example, Run
 
 class Metrics(ABC):
