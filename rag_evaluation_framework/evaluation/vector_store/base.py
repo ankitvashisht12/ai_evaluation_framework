@@ -1,9 +1,17 @@
-from typing import List
+from typing import List, Optional, Dict, Any, Mapping
+
+Metadata = Mapping[str, Any]
 from abc import ABC, abstractmethod
 
 class VectorStore(ABC):
     @abstractmethod
-    def add_docs(self, docs: List[str], embeddings: List[List[float]]) -> None:
+    def add_docs(
+        self,
+        docs: List[str],
+        embeddings: List[List[float]],
+        doc_ids: Optional[List[str]] = None,
+        metadatas: Optional[List[Metadata]] = None,
+    ) -> None:
         """Add documents and their embeddings to the vector store."""
         raise NotImplementedError
 
