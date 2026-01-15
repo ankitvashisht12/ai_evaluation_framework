@@ -273,8 +273,32 @@ class Evaluation:
             # Collect all metric scores across all runs
             metrics_by_name: Dict[str, List[float]] = {}
             
-            for run in results:
-                # Check for feedback/evaluation results on each run
+            for row in results:
+                # Newer langsmith returns ExperimentResultRow dicts
+                if isinstance(row, dict):
+                    evaluation_results = row.get("evaluation_results")
+                    if isinstance(evaluation_results, dict):
+                        results_list = evaluation_results.get("results")
+                        if isinstance(results_list, list):
+                            for result in results_list:
+                                if hasattr(result, "key") and hasattr(result, "score"):
+                                    metric_name = str(result.key) if result.key else None
+                                    score = result.score
+                                elif isinstance(result, dict):
+                                    metric_name = str(result.get("key")) if result.get("key") else None
+                                    score = result.get("score")
+                                else:
+                                    metric_name = None
+                                    score = None
+
+                                if metric_name and isinstance(score, (int, float)):
+                                    metrics_by_name.setdefault(metric_name, []).append(float(score))
+
+                    run = row.get("run")
+                else:
+                    run = row
+
+                # Check for feedback/evaluation results on each run (older API)
                 if hasattr(run, 'feedback') and run.feedback:
                     # Feedback is a list of evaluation results
                     feedback_list = run.feedback
