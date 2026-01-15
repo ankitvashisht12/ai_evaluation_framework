@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from langsmith import evaluate
@@ -66,13 +68,17 @@ class Evaluation:
             langsmith_dataset_name, kb_data_path, query_field
         )
 
-    def __get_kb_markdown_files_path(self) -> List[Path]:
+    def __get_kb_json_files_path(self) -> List[Path]:
         if not os.path.exists(self.kb_data_path):
             logger.error("Knowledge base path does not exist: %s", self.kb_data_path)
             raise FileNotFoundError(f"Knowledge base data path {self.kb_data_path} does not exist")
 
-        files = [Path(os.path.join(self.kb_data_path, file)) for file in os.listdir(self.kb_data_path) if file.endswith(".md")]
-        logger.debug("Found %d markdown files in knowledge base", len(files))
+        files = [
+            Path(os.path.join(self.kb_data_path, file))
+            for file in os.listdir(self.kb_data_path)
+            if file.endswith(".json")
+        ]
+        logger.debug("Found %d json files in knowledge base", len(files))
         return files
 
     def __run_retrieval(self, input: dict, embedder: Embedder, vector_store: VectorStore, k: int, reranker: Optional[Reranker] = None) -> List[str]:
@@ -167,17 +173,38 @@ class Evaluation:
 
         # Process Knowledge base (chunk, embed and store in vector store)
         logger.info("Processing knowledge base...")
-        kb_markdown_files_path = self.__get_kb_markdown_files_path()
+        kb_markdown_files_path = self.__get_kb_json_files_path()
         total_chunks = 0
 
         for file_path in kb_markdown_files_path:
             logger.debug("Processing file: %s", file_path.name)
             with open(file_path, "r", encoding="utf-8") as file:
-                file_content = file.read()
-                chunked_docs = chunker.chunk(file_content)
+                try:
+                    data = json.load(file)
+                except json.JSONDecodeError as exc:
+                    logger.error("Invalid JSON in %s: %s", file_path.name, str(exc))
+                    raise
+
+                markdown_content = data.get("markdown", "")
+                metadata_value = data.get("metadata", {})
+                if not isinstance(metadata_value, dict):
+                    logger.warning(
+                        "Metadata in %s is not an object; wrapping as {'value': metadata}",
+                        file_path.name,
+                    )
+                    metadata_value = {"value": metadata_value}
+
+                chunked_docs = chunker.chunk(markdown_content)
                 logger.debug("Created %d chunks from %s", len(chunked_docs), file_path.name)
                 embeddings = embedder.embed_docs(chunked_docs)
-                vector_store.add_docs(chunked_docs, embeddings)
+                metadatas = [metadata_value] * len(chunked_docs)
+                doc_ids = [str(uuid.uuid4()) for _ in chunked_docs]
+                vector_store.add_docs(
+                    chunked_docs,
+                    embeddings,
+                    doc_ids=doc_ids,
+                    metadatas=metadatas,
+                )
                 total_chunks += len(chunked_docs)
 
         logger.info("Knowledge base indexed: %d total chunks from %d files", total_chunks, len(kb_markdown_files_path))
