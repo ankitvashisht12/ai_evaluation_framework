@@ -1,8 +1,12 @@
-# RAG Evaluation Framework
+# AI Evaluation Framework
 
-A framework for systematically evaluating RAG (Retrieval-Augmented Generation) pipelines using Langsmith SDK.
+A framework for systematically evaluating AI systems — starting with RAG (Retrieval-Augmented Generation) pipelines, with support for agent evaluations and more.
 
-## Pipeline
+## Modules
+
+### RAG Evaluation
+
+Evaluate RAG pipelines using Langsmith SDK with the following configurable stages:
 
 1. Pre-processing Data (kb aka knowledge base)
 2. Synthetic Data Generation
@@ -12,7 +16,7 @@ A framework for systematically evaluating RAG (Retrieval-Augmented Generation) p
 5. @k parameter aka retrieved documents
 6. Re-ranker (optional)
 
-## Single Evaluation
+## RAG — Single Evaluation
 
 ```python
 from rag_evaluation_framework import Evaluation
@@ -31,7 +35,7 @@ results = evaluation.run(
 )
 ```
 
-## Hyperparameter Sweep
+## RAG — Hyperparameter Sweep
 
 Run multiple configurations at once and compare results:
 
@@ -63,7 +67,7 @@ sweep_results = evaluation.sweep(
 
 Combinations sharing the same `(chunker, embedder)` pair reuse the chunked and embedded knowledge base, so you don't pay for redundant embedding API calls.
 
-## Visualization
+## RAG — Visualization
 
 ```python
 from rag_evaluation_framework import ComparisonGraph
