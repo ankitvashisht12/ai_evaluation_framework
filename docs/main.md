@@ -31,7 +31,8 @@ results = evaluator.run(
 
 ## Components
 
-- **[Evaluation](evaluation.md)** - Core evaluation pipeline and API details
+- **[Evaluation](evaluation.md)** - Core evaluation pipeline, single runs and sweeps
+- **[Visualization](visualization.md)** - Compare sweep results with bar, line and heatmap charts
 - **[Synthetic Data Generation](synthetic_datagen.md)** - Coming soon
 - **[Chunker](chunker.md)** - Document chunking strategies
 - **[Embedder](embedder.md)** - Embedding model integration
@@ -61,8 +62,6 @@ rag_evaluation_framework/
 │   └── reranker/
 │       ├── base.py           # Abstract base
 │       └── default.py        # Default reranker (Cohere)
-├── storage/
-│   └── results.py            # Save/load evaluation results
 └── visualization/
     └── comparison.py         # ComparisonGraph class
 ```

@@ -33,12 +33,24 @@ results = evaluator.run(
 6. Calculate metrics (see [Metrics](metrics.md)): recall@k, precision@k, MRR@k
 7. Return results with Langsmith trace URLs
 
+### Return Value
+
+```python
+{
+    "metrics": {"token_level_recall@5": 0.85, "token_level_precision@5": 0.72, ...},
+    "langsmith_experiment_url": "https://smith.langchain.com/...",
+    "raw_results": ExperimentResults  # Raw Langsmith object
+}
+```
+
 ## Hyperparameter Sweep
 
 Evaluate multiple configurations automatically:
 
 ```python
 from rag_evaluation_framework import Evaluation, SweepConfig
+from rag_evaluation_framework.evaluation.chunker import RecursiveCharTextSplitter
+from rag_evaluation_framework.evaluation.embedder.openai_embedder import OpenAIEmbedder
 
 evaluator = Evaluation(
     langsmith_dataset_name="my-dataset",
@@ -47,21 +59,90 @@ evaluator = Evaluation(
 
 sweep_results = evaluator.sweep(
     sweep_config=SweepConfig(
-        chunkers=[chunker1, chunker2],
-        embedders=[embedder1, embedder2],
-        vector_stores=[vector_store1, vector_store2],  # Optional
+        chunkers=[
+            RecursiveCharTextSplitter(chunk_size=500, chunk_overlap=50),
+            RecursiveCharTextSplitter(chunk_size=1000, chunk_overlap=100),
+        ],
+        embedders=[
+            OpenAIEmbedder(model_name="text-embedding-3-small"),
+            OpenAIEmbedder(model_name="text-embedding-3-large"),
+        ],
         k_values=[5, 10, 20],
-        rerankers=[None, reranker1],
+        rerankers=[None],  # None = no reranking
     )
 )
 ```
 
+### SweepConfig Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `chunkers` | `List[Chunker]` | Framework default | Chunker instances to evaluate |
+| `embedders` | `List[Embedder]` | Framework default | Embedder instances to evaluate |
+| `k_values` | `List[int]` | `[5]` | Top-k retrieval values |
+| `rerankers` | `List[Optional[Reranker]]` | `[None]` | Reranker instances (include `None` for no reranking) |
+| `metrics` | `Dict[str, Metrics]` | All token-level metrics | Metrics to compute for every experiment |
+| `max_concurrency` | `int` | `4` | Max concurrent queries within each Langsmith evaluation run |
+
 ### How It Works
 
-- Generates all combinations of provided parameters
-- Runs each combination as a separate Langsmith experiment
-- Collects all results with metadata about each configuration
-- Returns `SweepResults` object for comparison and visualization
+1. Generates the Cartesian product of all provided parameters
+2. Groups combinations by `(chunker, embedder)` pair — chunks and embeds the KB once per group to avoid redundant (and costly) embedding API calls
+3. Runs each combination as a separate Langsmith experiment
+4. Returns a list of result dicts, one per combination
+
+### Cost Optimisation
+
+The sweep is structured so that the expensive steps (chunking + embedding the full KB) happen once per unique `(chunker, embedder)` pair.  Variations in `k` and `reranker` only trigger the lightweight retrieval + evaluation step.
+
+```
+For each (chunker, embedder):     # chunk + embed once
+    For each k:                   # lightweight: just retrieve + evaluate
+        For each reranker:
+            → run evaluation
+```
+
+### Partial Sweeps
+
+Any parameter you omit uses the framework default:
+
+```python
+# Only vary k — uses default chunker, embedder, no reranker
+sweep_results = evaluator.sweep(
+    sweep_config=SweepConfig(k_values=[5, 10, 20])
+)
+```
+
+### Return Value
+
+A `List[Dict]` where each dict contains:
+
+```python
+{
+    "config": {
+        "chunker": "RecursiveCharTextSplitter(1000,100)",
+        "embedder": "OpenAIEmbedder(text-embedding-3-small)",
+        "k": 10,
+        "reranker": None
+    },
+    "metrics": {"token_level_recall@10": 0.85, ...},
+    "langsmith_experiment_url": "https://smith.langchain.com/...",
+    "raw_results": ExperimentResults
+}
+```
+
+### Visualising Sweep Results
+
+Pass sweep results to `ComparisonGraph` for visual comparison. See [Visualization](visualization.md).
+
+```python
+from rag_evaluation_framework import ComparisonGraph
+
+graph = ComparisonGraph(sweep_results)
+graph.bar()           # grouped bar chart
+graph.line(x="k")     # line chart varying k
+graph.heatmap()       # colour-coded grid
+```
 
 ## Components
 
@@ -69,14 +150,4 @@ sweep_results = evaluator.sweep(
 - **[Embedder](embedder.md)** - Embedding model integration
 - **[Metrics](metrics.md)** - Evaluation metrics (recall, precision, MRR)
 - **[Vector Store](vector_store.md)** - Vector database abstraction
-
-## Results
-
-Evaluation results include:
-- Metrics per k value (recall@k, precision@k, MRR@k)
-- Langsmith experiment URLs
-- Retrieved documents for each query
-- Configuration metadata
-
-Results can be saved and loaded for later analysis and visualization.
-
+- **[Visualization](visualization.md)** - Comparing sweep results graphically
